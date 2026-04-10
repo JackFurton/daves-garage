@@ -51,6 +51,8 @@ def main() -> int:
     parser.add_argument("--watch", action="store_true", help="Tail the hive logfile and exit")
     parser.add_argument("--dry-run", action="store_true",
                         help="Run the loop but skip git push, PR creation, and DDB task writes")
+    parser.add_argument("--doctor", action="store_true",
+                        help="Validate every credential and connection, then exit (preflight check)")
     args = parser.parse_args()
 
     # Load config
@@ -74,6 +76,10 @@ def main() -> int:
     # Configure logging
     setup_logging(level=config.log_level, logfile=config.logfile)
     log = get_logger("hive")
+
+    # Preflight: validate all the things and bail before any heavy machinery starts
+    if args.doctor:
+        return _doctor(config, log)
 
     # Initialize components
     state = HiveState(config.dynamodb_table, config.aws_profile, config.aws_region)
@@ -167,6 +173,126 @@ def main() -> int:
         log.info("Done.")
 
     return exit_code
+
+
+def _doctor(config, log) -> int:
+    """Preflight: validate every credential and connection before the loop runs.
+
+    The first night using Dave fails for one of three reasons, almost always:
+      1. A credential is wrong (token, AWS profile, webhook URL).
+      2. A required scope is missing (GitHub token can't push, IAM can't write DDB).
+      3. The DynamoDB table doesn't exist yet (forgot setup_table.py).
+
+    --doctor catches all three in 5 seconds for ~$0.001 instead of in the middle
+    of a real cycle for $0.10 of wasted Sonnet calls and a confused Slack channel.
+    """
+    import requests as _requests
+
+    log.info(f"Running preflight check for {config.repo}...")
+    errors = []
+    warnings = []
+
+    # 1. GitHub — token works AND has read scope on the configured repo
+    github = None
+    try:
+        github = GitHubClient(config.github_token, config.repo)
+        default_branch = github.get_default_branch()
+        log.info(f"  ok  GitHub: {config.repo} (default branch: {default_branch})")
+    except Exception as e:
+        errors.append(f"GitHub access failed for {config.repo}: {e}")
+        log.error(f"  FAIL GitHub: {e}")
+
+    # 2. GitHub — token can list issues with the configured label
+    if github is not None:
+        try:
+            issues = github.get_issues(config.issue_label)
+            log.info(f"  ok  GitHub issues: {len(issues)} open issue(s) tagged '{config.issue_label}'")
+            if not issues:
+                warnings.append(
+                    f"No open issues tagged '{config.issue_label}' yet. "
+                    f"File one and Dave will pick it up next cycle."
+                )
+        except Exception as e:
+            errors.append(f"Could not list issues with label '{config.issue_label}': {e}")
+            log.error(f"  FAIL GitHub issues: {e}")
+
+    # 3. Anthropic — tiny round-trip with the triage model
+    try:
+        client = anthropic.Anthropic(api_key=config.anthropic_api_key)
+        resp = client.messages.create(
+            model=config.triage_model,
+            max_tokens=20,
+            messages=[{"role": "user", "content": "Say only the word 'ok'"}],
+        )
+        reply = resp.content[0].text.strip()
+        log.info(f"  ok  Anthropic: {config.triage_model} responded ({reply!r})")
+    except Exception as e:
+        errors.append(f"Anthropic API call failed: {e}")
+        log.error(f"  FAIL Anthropic: {e}")
+
+    # 4. DynamoDB — table is reachable AND we can read from it
+    try:
+        state = HiveState(config.dynamodb_table, config.aws_profile, config.aws_region)
+        spend = state.get_daily_spend()
+        log.info(f"  ok  DynamoDB: '{config.dynamodb_table}' table accessible "
+                 f"(today's spend: ${spend:.4f})")
+    except Exception as e:
+        errors.append(
+            f"DynamoDB access failed: {e}\n"
+            f"     → Did you run 'python setup_table.py {config.dynamodb_table}' yet?"
+        )
+        log.error(f"  FAIL DynamoDB: {e}")
+
+    # 5. Slack — webhook responds and accepts a real test post
+    if config.slack_webhook_url:
+        try:
+            r = _requests.post(
+                config.slack_webhook_url,
+                json={"text": ":hey-im-dave: Dave preflight check — if you see this, the webhook works."},
+                timeout=10,
+            )
+            if r.status_code == 200:
+                log.info(f"  ok  Slack: webhook accepted test post")
+            else:
+                warnings.append(f"Slack webhook returned {r.status_code}: {r.text[:200]}")
+                log.warning(f"  warn Slack: HTTP {r.status_code}")
+        except Exception as e:
+            warnings.append(f"Slack webhook test failed: {e}")
+            log.warning(f"  warn Slack: {e}")
+    else:
+        log.info("  --  Slack: not configured (notifications disabled)")
+
+    # 6. Persona — informational
+    if config.persona and config.persona.get("name"):
+        log.info(f"  ok  Persona: {config.persona['name']} (voice + emoji map loaded)")
+    else:
+        log.info("  --  Persona: disabled (Dave will use boring default messages)")
+
+    # 7. Budget — sanity-check the cap
+    log.info(f"  ok  Budget: ${config.max_daily_cost_usd:.2f}/day cap")
+    if config.max_daily_cost_usd > 50:
+        warnings.append(
+            f"Daily budget cap is ${config.max_daily_cost_usd:.2f}. That's a lot for a "
+            f"first run — consider lowering to $5 until you trust the loop."
+        )
+
+    # ── Summary ──
+    print()
+    if warnings:
+        for w in warnings:
+            log.warning(f"  ! {w}")
+    if errors:
+        for e in errors:
+            log.error(f"  X {e}")
+        log.error(f"\nPreflight FAILED with {len(errors)} error(s). Fix and re-run --doctor.")
+        return EXIT_ERROR
+
+    log.info("\nAll preflight checks passed. Dave is ready to roll.")
+    log.info("\nNext steps:")
+    log.info("  1. python dave.py --once --dry-run    # safe practice run")
+    log.info("  2. python dave.py --once              # one real cycle")
+    log.info("  3. python dave.py                     # full loop")
+    return EXIT_OK
 
 
 def _print_status(state: HiveState, budget: BudgetTracker, config) -> None:

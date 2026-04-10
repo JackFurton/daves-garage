@@ -39,9 +39,22 @@ class HiveConfig:
     auto_merge: bool = False
     # If a worker holds a task longer than this without a heartbeat, it's reclaimed.
     stale_task_minutes: int = 30
-    # When the issue queue is empty AND auto_propose is true, the controller asks Claude
-    # to propose new issues for the repo. Off by default — opt-in for the truly infinite loop.
+
+    # ── Auto-propose mode (the truly infinite loop) ──
+    # When the issue queue is empty AND auto_propose is true, Dave asks Claude to read
+    # the repo and propose ONE new issue, then files it on GitHub with the issue_label.
+    # Off by default — opt-in.
     auto_propose: bool = False
+    # Don't propose if there are already this many open Dave-tagged issues.
+    auto_propose_max_open: int = 3
+    # Hard cap on how many issues Dave can propose in a single UTC day. Belt + suspenders
+    # on top of the cost cap.
+    auto_propose_max_per_day: int = 5
+    # Only propose if the issue queue has been empty for at least this long. Stops Dave
+    # from filing a proposal the second your real issues get drained.
+    auto_propose_min_idle_minutes: int = 10
+    # Issues filed by auto-propose get this prefix in the title so they're easy to spot.
+    auto_propose_title_prefix: str = "[dave-proposed]"
 
     # Observability
     logfile: Optional[str] = "dave.log"

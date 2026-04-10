@@ -87,6 +87,16 @@ python dave.py --once         # one cycle, then exit (great for cron / smoke tes
 python dave.py --status       # dump current state and exit
 python dave.py --watch        # tail dave.log with rich coloring (no loop)
 python dave.py --dry-run      # full loop, but no commits / no PRs / no DDB writes
+python dave.py --doctor       # preflight: validates GitHub, Anthropic, DDB, Slack
+```
+
+**First-run sequence** (do this in order — each step is a safety net):
+
+```bash
+python dave.py --doctor              # 1. validate every credential & connection
+python dave.py --once --dry-run      # 2. full Sonnet pass, no side effects (~$0.10)
+python dave.py --once                # 3. one real cycle: file → PR → Slack
+python dave.py                       # 4. let it loop
 ```
 
 ### Multiple repos in parallel
@@ -214,16 +224,22 @@ dave/
 
 Things that work today:
 - The full loop: triage → smart context → implement → PR → lessons
-- Multi-instance safe DynamoDB state with conditional updates and stale-task reclaim
-- Persona-driven Slack and PR narration
-- `--once`, `--status`, `--watch`, `--dry-run`
-- Atomic budget gate with overshoot warnings
+- Multi-instance safe DynamoDB state with conditional updates, heartbeats, stale-task reclaim
+- Persona-driven Slack + PR narration
+- Smart two-pass file selection (Haiku picks → Sonnet implements)
+- Structured lessons with category/tag retrieval
+- Atomic budget gate with 80% warning + overshoot guard
+- Operational surface: `--once`, `--status`, `--watch`, `--dry-run`, `--doctor`
+- GitHub API retry decorator (connection errors + 5xx with exponential backoff)
+- Systemd-friendly exit codes + sample unit file in `deploy/`
+- **Auto-propose mode** — when the issue queue is empty for `auto_propose_min_idle_minutes`, Dave reads the repo and proposes ONE issue. Capped at `auto_propose_max_per_day` and `auto_propose_max_open` so it can't run away.
+- Test suite: 64 pytest tests covering cost, config, worker file ops, and state via moto
 
-Things still cooking (see the task list in your Claude Code session):
-- Auto-propose mode — when the issue queue empties, ask Claude to read the repo and generate new issues. This is what makes the loop *actually* infinite.
-- Systemd unit file template + Hetzner deploy notes
-- Test suite (cost, config, state via moto, worker file ops)
-- GitHub API retry decorator for transient failures
+Things you might still want (open follow-ups):
+- A way to give Dave feedback when his PRs are bad (RLHF-lite — comment markers he reads on his next cycle)
+- Hot-reload of `dave.yaml` without restarting (currently you have to `systemctl restart dave`)
+- A web dashboard for `dave --status` (DDB → static HTML or a tiny FastAPI app)
+- More personality packs in `dave.example.yaml` so users can swap "doomer Linux greybeard" / "noir detective" / "1940s pulp narrator" out of the box
 
 ---
 

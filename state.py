@@ -262,3 +262,72 @@ class HiveState:
     def get_config_overrides(self) -> dict:
         resp = self.table.get_item(Key={"PK": "CONFIG", "SK": "SETTINGS"})
         return resp.get("Item", {})
+
+    # ── Auto-propose tracking ──
+
+    def record_proposed_issue(self, repo: str, issue_id: int, title: str):
+        """Log that Dave proposed (filed) an issue today."""
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        self.table.update_item(
+            Key={"PK": f"PROPOSED#{repo}#{today}", "SK": "META"},
+            UpdateExpression="ADD #c :one SET last_issue_id = :iid, last_title = :t, last_at = :now",
+            ExpressionAttributeNames={"#c": "count"},
+            ExpressionAttributeValues={
+                ":one": Decimal(1),
+                ":iid": issue_id,
+                ":t": title,
+                ":now": _utc_now_iso(),
+            },
+        )
+
+    def get_proposed_count_today(self, repo: str) -> int:
+        """How many issues has Dave proposed for this repo today?"""
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        resp = self.table.get_item(Key={"PK": f"PROPOSED#{repo}#{today}", "SK": "META"})
+        item = resp.get("Item")
+        if not item:
+            return 0
+        return int(item.get("count", 0))
+
+    def get_recent_proposed_titles(self, repo: str, limit: int = 10) -> list:
+        """Recent proposal titles, used to deduplicate when Dave proposes a new one."""
+        # Scan over the last 7 days of proposals for this repo
+        resp = self.table.scan(
+            FilterExpression="begins_with(PK, :prefix) AND SK = :sk",
+            ExpressionAttributeValues={
+                ":prefix": f"PROPOSED#{repo}#",
+                ":sk": "META",
+            },
+        )
+        items = resp.get("Items", [])
+        items.sort(key=lambda x: x.get("last_at", ""), reverse=True)
+        titles = []
+        for it in items:
+            t = it.get("last_title")
+            if t:
+                titles.append(t)
+            if len(titles) >= limit:
+                break
+        return titles
+
+    # ── Idle-queue tracking (used by auto-propose) ──
+
+    def mark_queue_empty_now(self, repo: str):
+        """Stamp the moment the queue went empty so we can measure idle duration."""
+        self.table.put_item(Item={
+            "PK": f"QUEUE_STATE#{repo}",
+            "SK": "META",
+            "empty_since": _utc_now_iso(),
+        })
+
+    def clear_queue_empty_marker(self, repo: str):
+        """Drop the empty-since marker when the queue is no longer empty."""
+        try:
+            self.table.delete_item(Key={"PK": f"QUEUE_STATE#{repo}", "SK": "META"})
+        except ClientError:
+            pass
+
+    def get_queue_empty_since(self, repo: str) -> Optional[str]:
+        resp = self.table.get_item(Key={"PK": f"QUEUE_STATE#{repo}", "SK": "META"})
+        item = resp.get("Item")
+        return item.get("empty_since") if item else None

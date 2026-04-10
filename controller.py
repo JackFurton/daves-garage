@@ -1,6 +1,8 @@
-"""Controller — fetches issues, triages, dispatches workers."""
+"""Controller — fetches issues, triages, dispatches workers, optionally proposes new ones."""
 import json
 import re
+import tempfile
+from datetime import datetime, timedelta, timezone
 
 import anthropic
 
@@ -62,8 +64,16 @@ class Controller:
         pending = self.state.get_pending_tasks()
         if not pending:
             log.info("No pending tasks")
-            # TODO Phase 5: auto-propose mode kicks in here
+            # Track when the queue went empty so auto-propose can wait min_idle_minutes
+            if not self.state.get_queue_empty_since(self.config.repo):
+                self.state.mark_queue_empty_now(self.config.repo)
+            # Auto-propose if enabled and the gates allow it
+            if self.config.auto_propose and not self.dry_run:
+                self._maybe_propose_issue(open_issues=issues)
             return
+
+        # Queue is non-empty — clear the empty marker
+        self.state.clear_queue_empty_marker(self.config.repo)
 
         top_task = pending[0]
         issue_id = int(top_task["PK"].split("#")[1])
@@ -135,6 +145,142 @@ class Controller:
                 log.info(f"  triaged #{issue['number']} → priority {result.get('priority', 3)}")
             else:
                 log.debug(f"  #{issue['number']} already tracked, skipping")
+
+    # ── Auto-propose ──
+
+    def _maybe_propose_issue(self, open_issues: list):
+        """Decide whether to file a new issue, then file it.
+
+        All gates must pass:
+          1. Queue has been empty for at least auto_propose_min_idle_minutes
+          2. Fewer than auto_propose_max_open Dave-tagged issues are currently open
+          3. Fewer than auto_propose_max_per_day issues filed today
+        """
+        # Gate 1: idle time
+        empty_since = self.state.get_queue_empty_since(self.config.repo)
+        if not empty_since:
+            return  # Just went empty this cycle, wait
+        try:
+            empty_dt = datetime.fromisoformat(empty_since)
+            idle_minutes = (datetime.now(timezone.utc) - empty_dt).total_seconds() / 60
+        except (TypeError, ValueError):
+            return
+        if idle_minutes < self.config.auto_propose_min_idle_minutes:
+            log.info(f"Queue idle for {idle_minutes:.1f}min, waiting for "
+                     f"{self.config.auto_propose_min_idle_minutes}min before proposing")
+            return
+
+        # Gate 2: how many Dave-tagged issues are already open?
+        open_count = len(open_issues)
+        if open_count >= self.config.auto_propose_max_open:
+            log.info(f"Auto-propose skipped: {open_count} Dave issues already open "
+                     f"(max {self.config.auto_propose_max_open})")
+            return
+
+        # Gate 3: per-day cap
+        today_count = self.state.get_proposed_count_today(self.config.repo)
+        if today_count >= self.config.auto_propose_max_per_day:
+            log.info(f"Auto-propose skipped: {today_count} issues already proposed today "
+                     f"(max {self.config.auto_propose_max_per_day})")
+            return
+
+        log.info(f"Auto-proposing issue (idle {idle_minutes:.0f}min, "
+                 f"{today_count}/{self.config.auto_propose_max_per_day} today)")
+
+        # Generate the proposal
+        proposal = self._generate_proposal()
+        if not proposal:
+            return
+        if proposal.get("skip"):
+            log.info(f"Claude declined to propose: {proposal.get('skip_reason', 'no good issue found')}")
+            return
+
+        title = proposal.get("title", "").strip()
+        body = proposal.get("body", "").strip()
+        category = proposal.get("category", "ergonomic")
+        if not title or not body:
+            log.warning("Proposal missing title or body, skipping")
+            return
+
+        # Tag the title with the configured prefix so humans can spot bot-filed issues
+        full_title = f"{self.config.auto_propose_title_prefix} {title}"
+        body_with_marker = (
+            f"{body}\n\n"
+            f"---\n"
+            f"*This issue was proposed automatically by Dave (auto-propose mode). "
+            f"Category: `{category}`. If this isn't useful, just close it — Dave won't refile it.*"
+        )
+
+        try:
+            issue = self.github.create_issue(
+                title=full_title,
+                body=body_with_marker,
+                labels=[self.config.issue_label, "dave-proposed"],
+            )
+        except Exception as e:
+            log.error(f"Failed to create proposed issue: {e}")
+            return
+
+        log.info(f"Proposed issue #{issue['number']}: {title}")
+        self.state.record_proposed_issue(self.config.repo, issue["number"], full_title)
+        # Clear the empty marker so the next cycle picks up the new issue without re-proposing
+        self.state.clear_queue_empty_marker(self.config.repo)
+
+    def _generate_proposal(self) -> dict:
+        """Use Claude to read the repo and propose ONE new issue.
+
+        Clones the repo (shallow) so we can read README + file tree, then calls Haiku.
+        """
+        try:
+            with tempfile.TemporaryDirectory() as workdir:
+                repo_dir = self.github.clone_repo(workdir)
+                file_tree = self.github.get_file_tree(repo_dir, max_files=100)
+                readme = self.github.get_readme(repo_dir)
+        except Exception as e:
+            log.error(f"Could not clone repo for proposal: {e}")
+            return {}
+
+        lessons = self.state.get_lessons(self.config.repo, limit=10)
+        lessons_text = "\n".join(f"- {l['lesson']}" for l in lessons) if lessons else "(no lessons yet)"
+
+        recent = self.state.get_recent_proposed_titles(self.config.repo, limit=10)
+        recent_text = "\n".join(f"- {t}" for t in recent) if recent else "(none yet)"
+
+        prompt = prompts.render(
+            "propose_issue",
+            repo=self.config.repo,
+            readme=readme[:2500] if readme else "(no README)",
+            file_tree=file_tree[:2000],
+            lessons=lessons_text,
+            recent_proposals=recent_text,
+        )
+
+        try:
+            response = self.client.messages.create(
+                model=self.config.triage_model,  # cheap — Haiku is fine for proposals
+                max_tokens=1500,
+                messages=[{"role": "user", "content": prompt}],
+            )
+        except Exception as e:
+            log.error(f"Proposal API call failed: {e}")
+            return {}
+
+        try:
+            self.budget.log_call(
+                self.config.triage_model,
+                response.usage.input_tokens,
+                response.usage.output_tokens,
+                "auto_propose",
+            )
+        except Exception as e:
+            log.warning(f"Budget log skipped for proposal: {e}")
+
+        text = self._strip_to_json(response.content[0].text)
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            log.error(f"Could not parse proposal response: {text[:200]}")
+            return {}
 
     @staticmethod
     def _strip_to_json(text: str) -> str:

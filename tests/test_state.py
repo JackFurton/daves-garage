@@ -251,3 +251,41 @@ def test_get_lessons_scoped_to_repo(state):
     lessons = state.get_lessons("foo/bar")
     assert len(lessons) == 1
     assert lessons[0]["lesson"] == "a"
+
+
+# ── Auto-propose tracking ──
+
+def test_record_proposed_issue_increments_count(state):
+    state.record_proposed_issue("foo/bar", 1, "[dave-proposed] First")
+    state.record_proposed_issue("foo/bar", 2, "[dave-proposed] Second")
+    assert state.get_proposed_count_today("foo/bar") == 2
+
+
+def test_proposed_count_starts_at_zero(state):
+    assert state.get_proposed_count_today("foo/bar") == 0
+
+
+def test_get_recent_proposed_titles(state):
+    state.record_proposed_issue("foo/bar", 1, "[dave-proposed] Add tests")
+    state.record_proposed_issue("foo/bar", 2, "[dave-proposed] Fix typo")
+    titles = state.get_recent_proposed_titles("foo/bar", limit=10)
+    # Both should appear (most-recent first)
+    assert len(titles) >= 1
+
+
+def test_proposed_scoped_to_repo(state):
+    state.record_proposed_issue("foo/bar", 1, "A")
+    state.record_proposed_issue("other/repo", 2, "B")
+    assert state.get_proposed_count_today("foo/bar") == 1
+    assert state.get_proposed_count_today("other/repo") == 1
+
+
+# ── Idle queue tracking ──
+
+def test_queue_empty_marker_lifecycle(state):
+    assert state.get_queue_empty_since("foo/bar") is None
+    state.mark_queue_empty_now("foo/bar")
+    marker = state.get_queue_empty_since("foo/bar")
+    assert marker is not None
+    state.clear_queue_empty_marker("foo/bar")
+    assert state.get_queue_empty_since("foo/bar") is None

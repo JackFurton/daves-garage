@@ -126,6 +126,21 @@ class GitHubClient:
         )
         resp.raise_for_status()
 
+    @_with_retry()
+    def create_issue(self, title: str, body: str, labels: Optional[list] = None) -> dict:
+        """File a new GitHub issue. Used by auto-propose mode."""
+        payload = {"title": title, "body": body}
+        if labels:
+            payload["labels"] = labels
+        resp = requests.post(
+            f"{self.api}/repos/{self.repo}/issues",
+            headers=self.headers,
+            json=payload,
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     # ── Branches + PRs ──
 
     def clone_repo(self, workdir: str) -> str:

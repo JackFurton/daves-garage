@@ -36,10 +36,16 @@ auto_merge: false
 # worker died and reclaims the task. Workers heartbeat at every major step, so 30
 # minutes is comfortably above any normal Sonnet call.
 stale_task_minutes: 30
-# When the issue queue empties, ask Claude to propose new issues. Opt-in: this is
-# the difference between "infinite sleep" and "infinitely building." Make sure
-# your budget cap is set before turning this on.
+# ── Auto-propose mode (the truly infinite loop) ──
+# When the issue queue empties, ask Claude to read the repo and propose ONE new
+# issue, then file it on GitHub with the issue_label. This is what makes Dave
+# "infinitely building" instead of just "infinitely sleeping." Off by default.
+# Make sure your budget cap is set before turning this on.
 auto_propose: false
+auto_propose_max_open: 3              # don't propose if 3+ Dave issues already open
+auto_propose_max_per_day: 5           # hard cap on issues filed per UTC day
+auto_propose_min_idle_minutes: 10     # only propose if queue empty this long
+auto_propose_title_prefix: "[dave-proposed]"
 
 # ── Observability ──
 logfile: dave.log
