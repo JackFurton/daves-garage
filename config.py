@@ -49,6 +49,10 @@ class HiveConfig:
     auto_merge_method: str = "squash"  # 'merge' | 'squash' | 'rebase'
     # If a worker holds a task longer than this without a heartbeat, it's reclaimed.
     stale_task_minutes: int = 30
+    # Iterative PR mode: when Sonnet returns complete=false, the task stays alive and
+    # the next cycle continues working on the same PR branch instead of starting fresh.
+    # Hard cap on iterations per task so a single issue can't loop forever.
+    max_iterations_per_task: int = 5
 
     # ── Auto-propose mode (the truly infinite loop) ──
     # When the issue queue is empty AND auto_propose is true, Dave asks Claude to read

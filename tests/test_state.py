@@ -270,3 +270,41 @@ def test_queue_empty_marker_lifecycle(state):
     assert marker is not None
     state.clear_queue_empty_marker("foo/bar")
     assert state.get_queue_empty_since("foo/bar") is None
+
+
+# ── Iterative PR mode ──
+
+def test_mark_iterating_resets_to_pending_with_pr_metadata(state):
+    state.put_task(42, "Big refactor", priority=2, approach="...", repo="foo/bar")
+    state.assign_task(42, "worker-A")
+    # Worker did one round, decided more is needed
+    state.mark_iterating(42, pr_branch="dave/42-big-refactor", pr_number=99,
+                          next_steps="Still need to update the test suite and add migration docs")
+    task = state.get_task(42)
+    assert task["status"] == "pending"  # picked up next cycle
+    assert task["pr_branch"] == "dave/42-big-refactor"
+    assert int(task["pr_number"]) == 99
+    assert task["next_steps"].startswith("Still need")
+    assert int(task["iteration_count"]) == 1
+    # assigned_to should be cleared so the next worker can claim it cleanly
+    assert task.get("assigned_to") is None or "assigned_to" not in task
+
+
+def test_iteration_count_increments(state):
+    state.put_task(42, "Big refactor", 2, "", "foo/bar")
+    state.assign_task(42, "worker-A")
+    state.mark_iterating(42, "dave/42-big-refactor", 99, "round 2 todos")
+    state.assign_task(42, "worker-B")
+    state.mark_iterating(42, "dave/42-big-refactor", 99, "round 3 todos")
+    task = state.get_task(42)
+    assert int(task["iteration_count"]) == 2
+
+
+def test_iterating_task_appears_in_pending(state):
+    state.put_task(42, "Big refactor", 2, "", "foo/bar")
+    state.assign_task(42, "worker-A")
+    state.mark_iterating(42, "dave/42-big-refactor", 99, "more to do")
+    pending = state.get_pending_tasks()
+    assert len(pending) == 1
+    assert pending[0]["title"] == "Big refactor"
+    assert pending[0]["pr_branch"] == "dave/42-big-refactor"

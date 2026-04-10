@@ -73,10 +73,10 @@ persona:
     startup:        ":hey-im-dave:"
     issue_picked:   ":dave-ponder:"
     pr_created:     ":dave-oven-mits:"
-    pr_merged:      ":dave-chad:"
+    pr_merged:      ":dave-power-merge:"
     error:          ":dave-ponder:"
     shutdown:       ":hey-im-dave:"
-    budget_warning: ":dave-ponder:"
+    budget_warning: ":dave-pharaoh:"
   first_message: "Hey I'm Dave, welcome to my shop. Today we will be taking a look at {repo_url}"
 
 # ── Custom Slack messages (fallbacks if persona generation fails) ──

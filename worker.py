@@ -41,8 +41,37 @@ class Worker:
         title = issue["title"]
         body = issue.get("body") or ""
 
+        # Detect iteration mode: if the task already has pr_branch + pr_number, this is a
+        # continuation of work on an existing PR, not a fresh task.
+        existing_task = self.state.get_task(issue_id) if not self.dry_run else None
+        is_iteration = bool(
+            existing_task
+            and existing_task.get("pr_branch")
+            and existing_task.get("pr_number")
+        )
+        iteration_count = int(existing_task.get("iteration_count", 0)) if existing_task else 0
+        existing_pr_branch = existing_task.get("pr_branch") if existing_task else None
+        existing_pr_number = int(existing_task["pr_number"]) if existing_task and existing_task.get("pr_number") else None
+        prior_next_steps = existing_task.get("next_steps", "") if existing_task else ""
+
+        mode_label = f"ITERATION {iteration_count + 1}" if is_iteration else "FRESH"
         log.info(f"[{self.worker_id}] Picking up #{issue_id}: {title}"
+                 + f" ({mode_label})"
                  + (" (DRY RUN)" if self.dry_run else ""))
+
+        # Hard cap on iterations — protects against an issue that Sonnet keeps marking incomplete forever.
+        if is_iteration and iteration_count >= self.config.max_iterations_per_task:
+            msg = (f"Max iterations ({self.config.max_iterations_per_task}) reached on #{issue_id}. "
+                   f"Force-completing — review the PR manually if it's not actually done.")
+            log.warning(f"[{self.worker_id}] {msg}")
+            if existing_pr_number and self.config.auto_merge:
+                merge_result = self.github.merge_pr(existing_pr_number, method=self.config.auto_merge_method)
+                if merge_result.get("merged"):
+                    self.slack.pr_merged(issue_id, self.config.repo,
+                                         pr_url=existing_task.get("pr_url"),
+                                         pr_number=existing_pr_number)
+            self.state.complete_task(issue_id, existing_task.get("pr_url", ""), msg)
+            return
 
         # Atomic claim — bail if another worker grabbed it.
         # In dry-run mode we don't touch DDB at all (so the task stays pending for a real run later).
@@ -50,15 +79,23 @@ class Worker:
             if not self.state.assign_task(issue_id, self.worker_id):
                 log.info(f"[{self.worker_id}] #{issue_id} was claimed by another worker, skipping")
                 return
-            self.slack.issue_picked(issue_id, title, self.config.repo)
+            if not is_iteration:
+                self.slack.issue_picked(issue_id, title, self.config.repo)
 
         try:
             with tempfile.TemporaryDirectory() as workdir:
-                # 1. Clone and branch
-                log.info(f"[{self.worker_id}] Cloning {self.config.repo}...")
-                repo_dir = self.github.clone_repo(workdir)
-                branch = f"dave/{issue_id}-{self._slugify(title)}"
-                self.github.create_branch(repo_dir, branch)
+                # 1. Clone — fresh tasks get the default branch + a new branch.
+                #    Iterations clone the existing PR branch directly so the file
+                #    contents already reflect the previous round's commits.
+                if is_iteration:
+                    log.info(f"[{self.worker_id}] Cloning {self.config.repo} branch '{existing_pr_branch}'...")
+                    repo_dir = self.github.clone_repo(workdir, branch=existing_pr_branch)
+                    branch = existing_pr_branch
+                else:
+                    log.info(f"[{self.worker_id}] Cloning {self.config.repo}...")
+                    repo_dir = self.github.clone_repo(workdir)
+                    branch = f"dave/{issue_id}-{self._slugify(title)}"
+                    self.github.create_branch(repo_dir, branch)
                 if not self.dry_run:
                     self.state.heartbeat_task(issue_id, self.worker_id)
 
@@ -80,11 +117,13 @@ class Worker:
                 # 4. Pick model (escalate to Opus for high-priority issues if configured)
                 model = self._pick_model(issue_id)
 
-                # 5. Implement
+                # 5. Implement (with iteration context if continuing prior work)
                 log.info(f"[{self.worker_id}] Calling {model} to implement #{issue_id}...")
                 implementation = self._implement(
                     issue_id, title, body, file_tree, readme,
                     file_contents, lessons_text, model,
+                    iteration_count=iteration_count,
+                    prior_next_steps=prior_next_steps,
                 )
                 if not self.dry_run:
                     self.state.heartbeat_task(issue_id, self.worker_id)
@@ -103,43 +142,74 @@ class Worker:
                     log.info(f"  {implementation.get('plan', '(no plan)')}")
                     log.info(f"  Files: {[f.get('path') for f in implementation.get('files', [])]}")
                     log.info(f"  Summary: {implementation.get('summary', '(no summary)')}")
+                    log.info(f"  complete: {implementation.get('complete', True)}")
                     return
 
-                # 7. Commit and push
-                committed = self.github.commit_and_push(
-                    repo_dir, branch,
-                    f"dave: implement #{issue_id} — {title}",
-                )
+                # 7. Commit and push (works for both fresh + iteration)
+                if is_iteration:
+                    commit_msg = f"dave: continue #{issue_id} (iteration {iteration_count + 1}) — {title}"
+                else:
+                    commit_msg = f"dave: implement #{issue_id} — {title}"
+                committed = self.github.commit_and_push(repo_dir, branch, commit_msg)
                 if not committed:
                     raise RuntimeError("Nothing to commit — patches may have all missed their search strings")
 
-                # 8. Create PR
-                pr_body = self._build_pr_body(issue_id, title, implementation)
-                pr = self.github.create_pr(branch, f"dave: {title}", pr_body)
-                pr_url = pr["html_url"]
-                pr_number = pr["number"]
+                # 8. PR creation: only on the FIRST iteration. Subsequent iterations push
+                #    additional commits to the existing PR's branch.
+                if is_iteration:
+                    pr_url = existing_task.get("pr_url", "")
+                    pr_number = existing_pr_number
+                    log.info(f"[{self.worker_id}] Pushed iteration {iteration_count + 1} to existing PR #{pr_number}")
+                else:
+                    pr_body = self._build_pr_body(issue_id, title, implementation)
+                    pr = self.github.create_pr(branch, f"dave: {title}", pr_body)
+                    pr_url = pr["html_url"]
+                    pr_number = pr["number"]
+                    log.info(f"[{self.worker_id}] PR created: {pr_url}")
 
-                # 9. Mark complete + notify (Slack gets the Sonnet-generated Dave summary verbatim)
+                # 9. Decide based on Sonnet's `complete` flag.
+                #    Defaults to True if not present (preserves single-shot backward compat).
+                is_complete = bool(implementation.get("complete", True))
                 summary_text = implementation.get("summary", "")
-                self.state.complete_task(issue_id, pr_url, summary_text)
-                self.slack.pr_created(issue_id, pr_url, title, self.config.repo, summary=summary_text)
-                self._extract_lessons(issue_id, implementation)
+                next_steps = implementation.get("next_steps", "")
 
-                log.info(f"[{self.worker_id}] PR created: {pr_url}")
+                if is_complete:
+                    # Mark complete + notify + lessons
+                    self.state.complete_task(issue_id, pr_url, summary_text)
+                    # Slack pr_created only on the first iteration of a freshly opened PR.
+                    # If it's the last iteration of a multi-round PR, we'll just post pr_merged.
+                    if not is_iteration:
+                        self.slack.pr_created(issue_id, pr_url, title, self.config.repo, summary=summary_text)
+                    self._extract_lessons(issue_id, implementation)
 
-                # 10. Auto-merge if enabled — closes the loop without a human bottleneck
-                if self.config.auto_merge:
-                    log.info(f"[{self.worker_id}] Attempting auto-merge ({self.config.auto_merge_method})...")
-                    merge_result = self.github.merge_pr(pr_number, method=self.config.auto_merge_method)
-                    if merge_result.get("merged"):
-                        log.info(f"[{self.worker_id}] Auto-merged PR #{pr_number}")
-                        self.slack.pr_merged(
-                            issue_id, self.config.repo,
-                            pr_url=pr_url, pr_number=pr_number,
-                        )
-                    else:
-                        log.warning(f"[{self.worker_id}] Auto-merge skipped: "
-                                    f"{merge_result.get('reason', 'unknown')}")
+                    # 10. Auto-merge if enabled — closes the loop without a human bottleneck
+                    if self.config.auto_merge:
+                        log.info(f"[{self.worker_id}] Attempting auto-merge ({self.config.auto_merge_method})...")
+                        merge_result = self.github.merge_pr(pr_number, method=self.config.auto_merge_method)
+                        if merge_result.get("merged"):
+                            log.info(f"[{self.worker_id}] Auto-merged PR #{pr_number}")
+                            self.slack.pr_merged(
+                                issue_id, self.config.repo,
+                                pr_url=pr_url, pr_number=pr_number,
+                            )
+                        else:
+                            log.warning(f"[{self.worker_id}] Auto-merge skipped: "
+                                        f"{merge_result.get('reason', 'unknown')}")
+                else:
+                    # Not done yet — mark for iteration. Next cycle picks it up and continues.
+                    log.info(f"[{self.worker_id}] Iteration {iteration_count + 1} complete but issue not done. "
+                             f"Marking for next cycle. Next steps: {next_steps[:100]}")
+                    self.state.mark_iterating(
+                        issue_id=issue_id,
+                        pr_branch=branch,
+                        pr_number=pr_number,
+                        next_steps=next_steps,
+                    )
+                    # Post pr_created only on the FIRST iteration. Subsequent iterations
+                    # are intentionally quiet to avoid Slack spam.
+                    if not is_iteration:
+                        self.slack.pr_created(issue_id, pr_url, title, self.config.repo, summary=summary_text)
+                    self._extract_lessons(issue_id, implementation)
 
         except Exception as e:
             error_msg = str(e)[:500]
@@ -290,7 +360,8 @@ class Worker:
     # ── Implementation ──
 
     def _implement(self, issue_id: int, title: str, body: str, file_tree: str,
-                   readme: str, file_contents: dict, lessons: str, model: str) -> dict:
+                   readme: str, file_contents: dict, lessons: str, model: str,
+                   iteration_count: int = 0, prior_next_steps: str = "") -> dict:
         """Call Claude to plan and implement the issue. Returns parsed JSON."""
 
         # Render file_contents into a markdown-ish block
@@ -300,6 +371,26 @@ class Worker:
             file_contents_text = "\n\n".join(file_blocks)
         else:
             file_contents_text = "(no source files preloaded — work from the file tree alone)"
+
+        # Build the iteration block — only relevant if we're continuing prior work
+        if iteration_count > 0:
+            iteration_block = (
+                f"### ITERATION CONTEXT\n\n"
+                f"This is iteration **{iteration_count + 1}** on this issue. The PR branch already "
+                f"has commits from your previous rounds — the file contents shown above already "
+                f"reflect that work. Do NOT redo it.\n\n"
+                f"Here's what your previous self said was left to do:\n\n"
+                f"> {prior_next_steps or '(no notes from previous round — figure out what is left from the diff)'}\n\n"
+                f"Make progress on those next steps in this round. When you're done with this round, "
+                f"set `complete: true` only if the entire issue is now resolved. Otherwise set "
+                f"`complete: false` and write fresh `next_steps` for the round after this one."
+            )
+        else:
+            iteration_block = (
+                "### NOTE\n\nThis is the first round on this issue. If you can fully resolve it in "
+                "one PR, set `complete: true`. If the issue is too big to finish in one round, set "
+                "`complete: false` and write `next_steps` for your next iteration."
+            )
 
         prompt = prompts.render(
             "implement",
@@ -311,6 +402,7 @@ class Worker:
             readme=readme[:2000] if readme else "(no README)",
             file_contents=file_contents_text,
             lessons=lessons,
+            iteration_block=iteration_block,
         )
 
         # Inject persona voice instructions so the plan/summary/lessons come back in character.

@@ -173,20 +173,24 @@ class GitHubClient:
 
     # ── Branches + PRs ──
 
-    def clone_repo(self, workdir: str) -> str:
-        """Shallow-clone the repo's default branch into workdir, return path."""
+    def clone_repo(self, workdir: str, branch: Optional[str] = None) -> str:
+        """Shallow-clone the repo into workdir, return path.
+
+        If `branch` is given, clones that branch directly (used for iterative PR mode
+        when continuing work on an existing PR's head branch). Otherwise clones the
+        repo's default branch.
+        """
         repo_dir = os.path.join(workdir, self.repo.split("/")[-1])
         clone_url = f"https://x-access-token:{self.token}@github.com/{self.repo}.git"
-        subprocess.run(
-            [
-                "git", "clone",
-                "--depth=1",
-                "--single-branch",
-                clone_url,
-                repo_dir,
-            ],
-            check=True, capture_output=True,
-        )
+        cmd = [
+            "git", "clone",
+            "--depth=1",
+            "--single-branch",
+        ]
+        if branch:
+            cmd += ["--branch", branch]
+        cmd += [clone_url, repo_dir]
+        subprocess.run(cmd, check=True, capture_output=True)
         return repo_dir
 
     def create_branch(self, repo_dir: str, branch_name: str):

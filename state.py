@@ -78,7 +78,11 @@ class HiveState:
         return resp.get("Item")
 
     def assign_task(self, issue_id: int, worker_id: str) -> bool:
-        """Atomically claim a pending task. Returns False if another worker got there first."""
+        """Atomically claim a pending task. Returns False if another worker got there first.
+
+        Works for both fresh tasks AND iterating tasks (status='pending' is the gate).
+        Iterating tasks keep their pr_branch / pr_number / iteration_count fields.
+        """
         now = _utc_now_iso()
         try:
             self.table.update_item(
@@ -98,6 +102,29 @@ class HiveState:
             if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
                 return False
             raise
+
+    def mark_iterating(self, issue_id: int, pr_branch: str, pr_number: int,
+                       next_steps: str = ""):
+        """Stash PR metadata + bump iteration count, then revert task to pending so the
+        next cycle picks it up and continues working on the same branch."""
+        self.table.update_item(
+            Key={"PK": f"TASK#{issue_id}", "SK": "META"},
+            UpdateExpression=(
+                "SET #s = :p, pr_branch = :b, pr_number = :n, next_steps = :ns, "
+                "    last_iteration_at = :t "
+                "ADD iteration_count :one "
+                "REMOVE assigned_to, heartbeat_at"
+            ),
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={
+                ":p": "pending",
+                ":b": pr_branch,
+                ":n": pr_number,
+                ":ns": next_steps,
+                ":t": _utc_now_iso(),
+                ":one": Decimal(1),
+            },
+        )
 
     def heartbeat_task(self, issue_id: int, worker_id: str):
         """Refresh the heartbeat on a task this worker owns. Best-effort, swallows errors."""
