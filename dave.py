@@ -82,7 +82,13 @@ def main() -> int:
         return _doctor(config, log)
 
     # Initialize components
-    state = HiveState(config.dynamodb_table, config.aws_profile, config.aws_region)
+    state = HiveState(
+        table_name=config.dynamodb_table,
+        aws_profile=config.aws_profile,
+        aws_region=config.aws_region,
+        aws_access_key_id=config.aws_access_key_id,
+        aws_secret_access_key=config.aws_secret_access_key,
+    )
     budget = BudgetTracker(state, config.max_daily_cost_usd, slack=None)  # slack wired below
 
     # Persona — uses the cheap triage model so live narration stays affordable.
@@ -232,14 +238,20 @@ def _doctor(config, log) -> int:
 
     # 4. DynamoDB — table is reachable AND we can read from it
     try:
-        state = HiveState(config.dynamodb_table, config.aws_profile, config.aws_region)
+        state = HiveState(
+            table_name=config.dynamodb_table,
+            aws_profile=config.aws_profile,
+            aws_region=config.aws_region,
+            aws_access_key_id=config.aws_access_key_id,
+            aws_secret_access_key=config.aws_secret_access_key,
+        )
         spend = state.get_daily_spend()
         log.info(f"  ok  DynamoDB: '{config.dynamodb_table}' table accessible "
                  f"(today's spend: ${spend:.4f})")
     except Exception as e:
         errors.append(
             f"DynamoDB access failed: {e}\n"
-            f"     → Did you run 'python setup_table.py {config.dynamodb_table}' yet?"
+            f"     → Did you run 'python setup_table.py' yet?"
         )
         log.error(f"  FAIL DynamoDB: {e}")
 

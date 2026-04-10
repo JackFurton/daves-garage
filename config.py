@@ -22,7 +22,12 @@ class HiveConfig:
     max_daily_cost_usd: float = 10.00
 
     # AWS / DynamoDB
-    aws_profile: str = "default"
+    # Two ways to authenticate, in order of preference:
+    #   1. Inline keys here (aws_access_key_id + aws_secret_access_key) — simplest
+    #   2. AWS profile from ~/.aws/credentials (set aws_profile to the profile name)
+    aws_access_key_id: Optional[str] = None
+    aws_secret_access_key: Optional[str] = None
+    aws_profile: Optional[str] = None
     aws_region: str = "us-east-1"
     dynamodb_table: str = "dave"
 
@@ -36,7 +41,12 @@ class HiveConfig:
     # Loop
     poll_interval_seconds: int = 60
     issue_label: str = "dave"
+    # Auto-merge: if true, Dave merges his own PRs immediately after opening them.
+    # Combined with auto_propose, this is the "fully autonomous train" mode.
+    # Failed merges (conflicts, required reviews, failing checks) are logged and skipped —
+    # Dave just moves on to the next issue.
     auto_merge: bool = False
+    auto_merge_method: str = "squash"  # 'merge' | 'squash' | 'rebase'
     # If a worker holds a task longer than this without a heartbeat, it's reclaimed.
     stale_task_minutes: int = 30
 

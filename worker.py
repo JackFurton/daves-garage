@@ -117,13 +117,26 @@ class Worker:
                 pr_body = self._build_pr_body(issue_id, title, implementation)
                 pr = self.github.create_pr(branch, f"hive: {title}", pr_body)
                 pr_url = pr["html_url"]
+                pr_number = pr["number"]
 
-                # 9. Mark complete + notify + extract lessons
-                self.state.complete_task(issue_id, pr_url, implementation.get("summary", ""))
-                self.slack.pr_created(issue_id, pr_url, title, self.config.repo)
+                # 9. Mark complete + notify (Slack gets the Sonnet-generated Dave summary verbatim)
+                summary_text = implementation.get("summary", "")
+                self.state.complete_task(issue_id, pr_url, summary_text)
+                self.slack.pr_created(issue_id, pr_url, title, self.config.repo, summary=summary_text)
                 self._extract_lessons(issue_id, implementation)
 
                 log.info(f"[{self.worker_id}] PR created: {pr_url}")
+
+                # 10. Auto-merge if enabled — closes the loop without a human bottleneck
+                if self.config.auto_merge:
+                    log.info(f"[{self.worker_id}] Attempting auto-merge ({self.config.auto_merge_method})...")
+                    merge_result = self.github.merge_pr(pr_number, method=self.config.auto_merge_method)
+                    if merge_result.get("merged"):
+                        log.info(f"[{self.worker_id}] Auto-merged PR #{pr_number}")
+                        self.slack.pr_merged(issue_id, self.config.repo)
+                    else:
+                        log.warning(f"[{self.worker_id}] Auto-merge skipped: "
+                                    f"{merge_result.get('reason', 'unknown')}")
 
         except Exception as e:
             error_msg = str(e)[:500]

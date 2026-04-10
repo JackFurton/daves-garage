@@ -31,28 +31,9 @@ def state(fake_aws_credentials):
             BillingMode="PAY_PER_REQUEST",
         )
         client.get_waiter("table_exists").wait(TableName=TABLE_NAME)
-        yield HiveState(TABLE_NAME, aws_profile=None, aws_region="us-east-1")
-
-
-# HiveState.__init__ takes aws_profile but moto's mock works without it. We need to
-# adjust the constructor call so it doesn't break on profile lookup. The fixture
-# above passes aws_profile=None — handle it in a tiny patch:
-@pytest.fixture(autouse=True)
-def _patch_state_session(monkeypatch):
-    """Make HiveState ignore aws_profile=None and just use the default session."""
-    original_init = HiveState.__init__
-
-    def patched(self, table_name, aws_profile="default", aws_region="us-east-1"):
-        if aws_profile is None:
-            session = boto3.Session(region_name=aws_region)
-        else:
-            session = boto3.Session(profile_name=aws_profile, region_name=aws_region)
-        self.table = session.resource("dynamodb").Table(table_name)
-        self.table_name = table_name
-
-    monkeypatch.setattr(HiveState, "__init__", patched)
-    yield
-    monkeypatch.setattr(HiveState, "__init__", original_init)
+        # New HiveState init defaults aws_profile=None and falls back to env vars,
+        # which matches what fake_aws_credentials sets up — no patching needed.
+        yield HiveState(TABLE_NAME, aws_region="us-east-1")
 
 
 # ── put_task / get_task ──

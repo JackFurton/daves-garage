@@ -113,12 +113,23 @@ class SlackNotifier:
         )
         self._post(f"*[{repo}]* {text}", self._emoji("issue_picked", "🎯"))
 
-    def pr_created(self, issue_id: int, pr_url: str, title: str, repo: str):
-        text = self._generate(
-            "pr_created",
-            "PR ready for #{issue_id}: {title}",
-            issue_id=issue_id, pr_url=pr_url, title=title, repo=repo,
-        )
+    def pr_created(self, issue_id: int, pr_url: str, title: str, repo: str,
+                    summary: Optional[str] = None):
+        """Post about a newly-opened PR.
+
+        If `summary` is provided (the Sonnet-generated implementation summary in Dave's voice),
+        we use it verbatim — it's higher quality than anything Haiku would generate fresh, and
+        it's already in character because the persona was injected into the worker's prompt.
+        Falls back to live persona generation only if no summary was passed.
+        """
+        if summary and summary.strip():
+            text = summary.strip()
+        else:
+            text = self._generate(
+                "pr_created",
+                "PR ready for #{issue_id}: {title}",
+                issue_id=issue_id, pr_url=pr_url, title=title, repo=repo,
+            )
         self._post(f"*[{repo}]* {text}\n{pr_url}", self._emoji("pr_created", "🔨"))
 
     def pr_merged(self, issue_id: int, repo: str):

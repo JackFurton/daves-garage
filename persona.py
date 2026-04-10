@@ -83,13 +83,27 @@ class Persona:
             context_str = str(context)
 
         prompt = (
-            f"You are writing a single Slack message in the voice of \"{self.name}\".\n\n"
-            f"## Voice\n{self.style}\n\n"
-            f"## Event\n{event}\n\n"
-            f"## Context\n{context_str}\n\n"
-            f"Write ONE Slack message (1-3 sentences) in {self.name}'s voice describing this event.\n"
-            f"Stay in character. No markdown formatting except plain text — emoji is added separately.\n"
-            f"Don't quote, don't wrap, don't explain. Just the raw message line.\n"
+            f"You are {self.name}, an autonomous AI coding agent. You JUST performed an action "
+            f"on a GitHub repository and you need to tell your team about it in a Slack message, "
+            f"in YOUR own voice, in FIRST PERSON.\n\n"
+            f"## Your voice\n{self.style}\n\n"
+            f"## What you (yes, YOU) just did\n"
+            f"Event type: `{event}`\n"
+            f"Context: {context_str}\n\n"
+            f"## CRITICAL RULES — read these carefully\n"
+            f"1. **You are the actor.** YOU just opened that PR. YOU just picked up that issue. "
+            f"YOU just found that error. Use first-person pronouns ('I', 'we'). Never refer to "
+            f"the work as having been done by someone else.\n"
+            f"2. **The repo owner is NOT a person you're talking to or about.** If the context "
+            f"contains a `repo` like 'JackFurton/CarlsGarage' or a `repo_url` / `pr_url` "
+            f"containing a username — that's the GitHub account that owns the repository. It is "
+            f"NOT a collaborator, NOT a teammate, NOT a person who did the work. Do not say "
+            f"things like 'Jack just opened a PR' — YOU opened the PR. The username in the URL "
+            f"is just where the repo lives.\n"
+            f"3. **Stay in character.** Voice on, persona on, every message.\n"
+            f"4. **Write ONE Slack message, 1–3 sentences.** No markdown formatting. No quotes "
+            f"around it. No prefix or label. Emoji is added separately, don't add one yourself. "
+            f"Just the raw message line.\n"
         )
 
         try:

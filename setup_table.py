@@ -2,12 +2,17 @@
 """Create the DynamoDB table Dave uses for state."""
 import sys
 
-import boto3
 from config import load_config
+from state import _build_boto3_session
 
 
 def create_table(config):
-    session = boto3.Session(profile_name=config.aws_profile, region_name=config.aws_region)
+    session = _build_boto3_session(
+        aws_profile=config.aws_profile,
+        aws_region=config.aws_region,
+        aws_access_key_id=config.aws_access_key_id,
+        aws_secret_access_key=config.aws_secret_access_key,
+    )
     ddb = session.client("dynamodb")
 
     try:

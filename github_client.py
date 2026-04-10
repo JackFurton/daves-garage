@@ -141,6 +141,36 @@ class GitHubClient:
         resp.raise_for_status()
         return resp.json()
 
+    def merge_pr(self, pr_number: int, method: str = "squash") -> dict:
+        """Merge an open PR. method must be 'merge', 'squash', or 'rebase'.
+
+        Returns a dict with success/status info. Does NOT raise on merge-blocked
+        states (conflicts, failing checks, required reviews) — those leave the PR
+        open and Dave moves on to the next issue.
+        """
+        if method not in ("merge", "squash", "rebase"):
+            return {"merged": False, "reason": f"invalid merge method: {method}"}
+        try:
+            resp = requests.put(
+                f"{self.api}/repos/{self.repo}/pulls/{pr_number}/merge",
+                headers=self.headers,
+                json={"merge_method": method},
+                timeout=30,
+            )
+        except requests.exceptions.RequestException as e:
+            return {"merged": False, "reason": f"network error: {e}"}
+
+        if resp.status_code == 200:
+            return {"merged": True, "sha": resp.json().get("sha")}
+        # 405 = not mergeable (conflicts, failing required checks, etc.)
+        # 409 = head sha changed since open
+        # 422 = validation (e.g., required reviews not satisfied)
+        try:
+            err_msg = resp.json().get("message", resp.text)
+        except Exception:
+            err_msg = resp.text
+        return {"merged": False, "status": resp.status_code, "reason": err_msg}
+
     # ── Branches + PRs ──
 
     def clone_repo(self, workdir: str) -> str:

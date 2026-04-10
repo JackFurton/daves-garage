@@ -16,9 +16,33 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _build_boto3_session(aws_profile=None, aws_region="us-east-1",
+                          aws_access_key_id=None, aws_secret_access_key=None):
+    """Build a boto3 Session from inline keys, profile, or env-var fallback (in that order)."""
+    if aws_access_key_id and aws_secret_access_key:
+        return boto3.Session(
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            region_name=aws_region,
+        )
+    if aws_profile:
+        return boto3.Session(profile_name=aws_profile, region_name=aws_region)
+    # Falls back to env vars / instance role / default profile
+    return boto3.Session(region_name=aws_region)
+
+
 class HiveState:
-    def __init__(self, table_name: str, aws_profile: str = "default", aws_region: str = "us-east-1"):
-        session = boto3.Session(profile_name=aws_profile, region_name=aws_region)
+    def __init__(self, table_name: str,
+                 aws_profile: Optional[str] = None,
+                 aws_region: str = "us-east-1",
+                 aws_access_key_id: Optional[str] = None,
+                 aws_secret_access_key: Optional[str] = None):
+        session = _build_boto3_session(
+            aws_profile=aws_profile,
+            aws_region=aws_region,
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+        )
         self.table = session.resource("dynamodb").Table(table_name)
         self.table_name = table_name
 
