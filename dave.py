@@ -178,11 +178,15 @@ def main() -> int:
                     break
                 time.sleep(1)
     finally:
-        if shutdown_reason:
-            try:
+        # Post a session summary (stats + Dave sign-off) before shutting down.
+        try:
+            stats = state.get_session_stats(config.repo)
+            if stats.get("completed_count", 0) > 0 or stats.get("proposed_count", 0) > 0:
+                slack.session_summary(config.repo, stats, reason=shutdown_reason or "session end")
+            elif shutdown_reason:
                 slack.shutdown(config.repo, shutdown_reason)
-            except Exception as e:
-                log.warning(f"Could not post shutdown message to Slack: {e}")
+        except Exception as e:
+            log.warning(f"Could not post shutdown/summary to Slack: {e}")
         log.info("Done.")
 
     return exit_code

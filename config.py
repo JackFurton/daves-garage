@@ -70,6 +70,17 @@ class HiveConfig:
     # Issues filed by auto-propose get this prefix in the title so they're easy to spot.
     auto_propose_title_prefix: str = "[dave-proposed]"
 
+    # Test runner — run tests inside the cloned repo before pushing.
+    # If set, Dave runs this command after applying changes. If exit code != 0, the
+    # worker fails the task instead of shipping broken code. Leave empty to skip.
+    # Examples:
+    #   "cd build && cmake .. && make && ctest --output-on-failure"
+    #   "pip install -r requirements.txt && pytest -x"
+    #   "npm install && npm test"
+    test_command: Optional[str] = None
+    # Max seconds the test command can run before Dave kills it and fails the task.
+    test_timeout_seconds: int = 300
+
     # Observability
     logfile: Optional[str] = "dave.log"
     log_level: str = "INFO"

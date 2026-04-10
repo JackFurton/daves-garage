@@ -47,6 +47,15 @@ auto_propose_max_per_day: 5           # hard cap on issues filed per UTC day
 auto_propose_min_idle_minutes: 10     # only propose if queue empty this long
 auto_propose_title_prefix: "[dave-proposed]"
 
+# ── Test runner (optional) ──
+# If set, Dave runs this command after applying changes, before pushing.
+# If exit code != 0, Dave fails the task instead of shipping broken code.
+# Leave commented out to skip tests entirely.
+# test_command: "cd build && cmake .. && make && ctest --output-on-failure"
+# test_command: "pip install -r requirements.txt && pytest -x"
+# test_command: "npm install && npm test"
+# test_timeout_seconds: 300
+
 # ── Observability ──
 logfile: dave.log
 log_level: INFO

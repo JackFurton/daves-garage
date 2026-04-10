@@ -173,6 +173,40 @@ class SlackNotifier:
         )
         self._post(text, self._emoji("budget_warning", "💸"))
 
+    def session_summary(self, repo: str, stats: dict, reason: str = "budget hit"):
+        """Post a session/daily rollup — the last Slack message before Dave sleeps."""
+        completed = stats.get("completed_count", 0)
+        proposed = stats.get("proposed_count", 0)
+        spend = stats.get("spend", 0)
+        pr_urls = stats.get("pr_urls", [])
+        lessons = stats.get("lessons_count", 0)
+
+        lines = [
+            f"*[{repo}]* Session wrap-up ({reason}):",
+            f"  PRs shipped: {completed}",
+            f"  Issues proposed: {proposed}",
+            f"  Lessons stored: {lessons}",
+            f"  Today's spend: ${spend:.2f}",
+        ]
+        if pr_urls:
+            lines.append("  PRs:")
+            for url in pr_urls[-10:]:  # cap at 10
+                lines.append(f"    {url}")
+
+        text = "\n".join(lines)
+
+        # If persona is enabled, also generate a Dave-flavored sign-off
+        if self.persona is not None and self.persona.enabled:
+            signoff = self._generate(
+                "session_summary",
+                "That's a wrap for today. See you tomorrow.",
+                repo=repo, completed=completed, proposed=proposed,
+                spend=f"${spend:.2f}",
+            )
+            text = f"{text}\n\n{signoff}"
+
+        self._post(text, self._emoji("shutdown", "🛑"))
+
     def custom(self, text: str, emoji: str = "🐝"):
         """Send any arbitrary message — for trolling, cron pings, whatever."""
         self._post(text, emoji)

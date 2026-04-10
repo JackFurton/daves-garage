@@ -314,6 +314,32 @@ class HiveState:
         resp = self.table.get_item(Key={"PK": "CONFIG", "SK": "SETTINGS"})
         return resp.get("Item", {})
 
+    def get_session_stats(self, repo: str) -> dict:
+        """Gather stats for a daily/session summary. Returns a dict with:
+        completed_count, proposed_count, pr_urls, spend, lessons_count."""
+        # Completed tasks for this repo
+        completed = self.table.scan(
+            FilterExpression="#s = :s AND SK = :sk AND repo = :repo",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={":s": "complete", ":sk": "META", ":repo": repo},
+        ).get("Items", [])
+
+        # Collect PR URLs from RESULT rows
+        pr_urls = []
+        for task in completed:
+            result = self.table.get_item(Key={"PK": task["PK"], "SK": "RESULT"}).get("Item", {})
+            url = result.get("pr_url")
+            if url:
+                pr_urls.append(url)
+
+        return {
+            "completed_count": len(completed),
+            "proposed_count": self.get_proposed_count_today(repo),
+            "pr_urls": pr_urls,
+            "spend": self.get_daily_spend(),
+            "lessons_count": len(self.get_lessons(repo, limit=100)),
+        }
+
     def get_recent_completed_tasks(self, limit: int = 20) -> list:
         """Return Dave's recently completed tasks (most recent first), each joined
         with its RESULT row (PR url + summary). Used by --history."""

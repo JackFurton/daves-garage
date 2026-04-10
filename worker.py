@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import subprocess
 import tempfile
 import uuid
 from typing import Optional
@@ -145,6 +146,10 @@ class Worker:
                     log.info(f"  complete: {implementation.get('complete', True)}")
                     return
 
+                # 6b. Run tests if configured — fail the task instead of shipping broken code
+                if self.config.test_command:
+                    self._run_tests(repo_dir, issue_id)
+
                 # 7. Commit and push (works for both fresh + iteration)
                 if is_iteration:
                     commit_msg = f"dave: continue #{issue_id} (iteration {iteration_count + 1}) — {title}"
@@ -223,6 +228,36 @@ class Worker:
                 )
             except Exception as comment_err:
                 log.warning(f"Could not post failure comment: {comment_err}")
+
+    # ── Test runner ──
+
+    def _run_tests(self, repo_dir: str, issue_id: int):
+        """Run the configured test command inside the cloned repo. Raises on failure."""
+        cmd = self.config.test_command
+        timeout = self.config.test_timeout_seconds
+        log.info(f"[{self.worker_id}] Running tests: {cmd}")
+        try:
+            result = subprocess.run(
+                cmd,
+                shell=True,
+                cwd=repo_dir,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+            if result.returncode == 0:
+                log.info(f"[{self.worker_id}] Tests passed")
+            else:
+                # Truncate output for logging/error reporting
+                stdout_tail = result.stdout[-500:] if result.stdout else ""
+                stderr_tail = result.stderr[-500:] if result.stderr else ""
+                raise RuntimeError(
+                    f"Tests failed (exit {result.returncode}).\n"
+                    f"stdout (last 500 chars):\n{stdout_tail}\n"
+                    f"stderr (last 500 chars):\n{stderr_tail}"
+                )
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"Tests timed out after {timeout}s")
 
     # ── Smart context loading ──
 
