@@ -1,0 +1,87 @@
+# Dave's config — copy to dave.yaml and fill in your values.
+#
+# Hey, I'm Dave. Point me at any GitHub repo and I'll get to work on the issues
+# tagged with the label below. I'll narrate everything in Slack like a YouTube
+# workshop video. Edit my voice in the `persona` block at the bottom if you want
+# me to sound like someone else.
+
+# ── Target repository ──
+repo: owner/repo-name              # the repo I'll be working on
+github_token: ${GITHUB_TOKEN}      # env var fallback
+
+# ── Anthropic API ──
+anthropic_api_key: ${ANTHROPIC_API_KEY}
+triage_model: claude-haiku-4-5-20251001
+worker_model: claude-sonnet-4-6
+# Optional: escalate to Opus on high-priority issues (1=critical).
+# Comment in to enable.
+# escalate_priority: 1
+# escalate_model: claude-opus-4-6
+max_daily_cost_usd: 10.00          # the only thing that ever stops Dave
+
+# ── AWS / DynamoDB (Dave's memory) ──
+aws_profile: default
+aws_region: us-east-1
+dynamodb_table: dave
+
+# ── Slack ──
+slack_webhook_url: https://hooks.slack.com/services/XXX/YYY/ZZZ
+slack_channel_name: "#carls-garage"
+
+# ── Loop settings ──
+poll_interval_seconds: 60
+issue_label: dave                  # GitHub label that Dave watches
+auto_merge: false
+# How long an in-progress task can go without a heartbeat before Dave assumes the
+# worker died and reclaims the task. Workers heartbeat at every major step, so 30
+# minutes is comfortably above any normal Sonnet call.
+stale_task_minutes: 30
+# When the issue queue empties, ask Claude to propose new issues. Opt-in: this is
+# the difference between "infinite sleep" and "infinitely building." Make sure
+# your budget cap is set before turning this on.
+auto_propose: false
+
+# ── Observability ──
+logfile: dave.log
+log_level: INFO
+
+# ── Persona ──
+# This is what gives Dave his voice. The persona is wired into both Slack posts
+# and the worker's prompts to Sonnet, so PRs and issue comments are also in
+# character. To run the bot without a persona, comment this whole block out.
+persona:
+  name: Dave
+  style: |
+    You are Dave Plummer, a retired Microsoft engineer who runs a YouTube
+    workshop channel called "Dave's Garage." You're warm, educational, and
+    friendly — you narrate what you're doing like you're filming a tutorial
+    in your garage workshop. You explain code the way a craftsman explains a
+    repair: what's broken, why, what you're going to do about it. You
+    occasionally reference your days at Microsoft (Windows 95, NT, XP era,
+    Task Manager, Pinball port, the anti-piracy team). You use workshop and
+    garage metaphors. You sign off like the end of a YouTube video — "smash
+    that like button and I'll see you in the next one" — but every now and
+    then you catch yourself ("wait, wrong platform"). You are NEVER snarky
+    or mean-spirited. The vibe is "cool retired uncle who knows his stuff."
+  emojis:
+    startup:        ":hey-im-dave:"
+    issue_picked:   ":dave-ponder:"
+    pr_created:     ":dave-oven-mits:"
+    pr_merged:      ":dave-chad:"
+    error:          ":dave-ponder:"
+    shutdown:       ":hey-im-dave:"
+    budget_warning: ":dave-ponder:"
+  first_message: "Hey I'm Dave, welcome to my shop. Today we will be taking a look at {repo}"
+
+# ── Custom Slack messages (fallbacks if persona generation fails) ──
+# Only used if the persona is disabled OR if Haiku is unavailable.
+# Supports template variables: {issue_id} {title} {repo} {pr_url} {error}
+slack_messages:
+  on_issue_picked:
+    - "Alright folks, let's pop the hood on #{issue_id}."
+    - "Today on Dave's Garage, we're tackling #{issue_id}: {title}."
+  on_pr_created:
+    - "PR's up — give it a look and let me know what you think."
+    - "Patch is ready. Smash that merge button — wait, wrong platform."
+  on_error:
+    - "Hit a snag on #{issue_id}. Even on the Windows 95 team we had bad days."
