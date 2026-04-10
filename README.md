@@ -2,9 +2,11 @@
 
 > *Hey, I'm Dave. Welcome to my shop. Today we're gonna take a look at this GitHub repo of yours, and I'll walk you through how I work on it. Now back in my day at Microsoft, we would've called this "doing your job," but the kids these days call it "agentic coding." Either way — let's pop the hood and see what we're working with.*
 
-Dave is a portable autonomous coding loop. You point him at any GitHub repository, tag some issues with the `dave` label, and he gets to work — clone, read, implement, open a PR, post to Slack, learn from what he did, repeat. Forever, if you let him. The only thing that ever stops him is the daily $ cap you set.
+Dave is a portable autonomous coding loop. You point him at any GitHub repository, tag some issues with the `dave` label, and he gets to work — clone, read, implement, open a PR, optionally **merge it himself**, post to Slack, learn from what he did, and when the queue empties he can **propose his own next issues**. Forever, if you let him. The only thing that ever stops him is the daily $ cap you set.
 
-He has a personality. The Slack posts and PR descriptions sound like a retired Microsoft engineer narrating a YouTube workshop video, because that's exactly what he is.
+He has a personality. The Slack posts and PR descriptions sound like a retired Microsoft engineer narrating a YouTube workshop video, because that's exactly what he is — Dave is modeled on Dave Plummer, the real retired Microsoft engineer who runs the *Dave's Garage* YouTube channel. Workshop metaphors, "back in my day at Microsoft" asides, and "smash that like button — wait, wrong platform" outros included.
+
+> 📖 **For the system explanation**, read [`ARCHITECTURE.md`](ARCHITECTURE.md). For day-to-day operation, read [`RUNBOOK.md`](RUNBOOK.md). This README is the front door.
 
 ---
 
@@ -47,14 +49,30 @@ The other key feature: **the persona is wired everywhere.** Dave's voice shows u
 ```bash
 git clone https://github.com/JackFurton/daves-garage.git dave
 cd dave
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp dave.example.yaml dave.yaml
-# Edit dave.yaml — set your repo, GitHub token, Anthropic key, Slack webhook
+# Edit dave.yaml — fill in 4 things:
+#   1. repo: owner/your-target-repo
+#   2. github_token: ghp_xxx     (or fine-grained github_pat_xxx)
+#   3. anthropic_api_key: sk-ant-xxx
+#   4. slack_webhook_url: https://hooks.slack.com/services/...
+#   5. aws_access_key_id + aws_secret_access_key  (DDB read/write on the 'dave' table)
 python setup_table.py    # creates the DynamoDB table
+python dave.py --doctor  # validates everything before running
 python dave.py           # let him cook
 ```
 
 Now tag a GitHub issue with the `dave` label and watch him work.
+
+**First-run sequence** (each step is a safety net — total cost ~$0.30):
+
+```bash
+python dave.py --doctor              # 1. validate every credential & connection
+python dave.py --once --dry-run      # 2. full Sonnet pass, no side effects (~$0.10)
+python dave.py --once                # 3. one real cycle: file → PR → Slack
+python dave.py                       # 4. let it loop
+```
 
 ---
 
@@ -223,25 +241,74 @@ dave/
 ## Roadmap
 
 Things that work today:
-- The full loop: triage → smart context → implement → PR → lessons
+- The full loop: triage → smart context → implement → PR → **auto-merge** → lessons
+- **Train mode** — `auto_merge: true` + `auto_propose: true` makes the loop self-fueling: Dave merges his own PRs and files his own next issues, capped only by daily $ and per-day proposal limits
 - Multi-instance safe DynamoDB state with conditional updates, heartbeats, stale-task reclaim
-- Persona-driven Slack + PR narration
-- Smart two-pass file selection (Haiku picks → Sonnet implements)
-- Structured lessons with category/tag retrieval
-- Atomic budget gate with 80% warning + overshoot guard
+- Persona-driven Slack + PR narration with Sonnet summary piped verbatim to Slack (rich, in-character messages instead of templated ones)
+- Smart two-pass file selection (Haiku picks 5-10 relevant files → Sonnet implements)
+- Structured lessons with category/tag retrieval (Dave gets smarter on each repo over time)
+- Atomic budget gate with 80% warning + post-cap kill switch (exit code 2, systemd-aware)
 - Operational surface: `--once`, `--status`, `--watch`, `--dry-run`, `--doctor`
 - GitHub API retry decorator (connection errors + 5xx with exponential backoff)
-- Systemd-friendly exit codes + sample unit file in `deploy/`
-- **Auto-propose mode** — when the issue queue is empty for `auto_propose_min_idle_minutes`, Dave reads the repo and proposes ONE issue. Capped at `auto_propose_max_per_day` and `auto_propose_max_open` so it can't run away.
-- Test suite: 64 pytest tests covering cost, config, worker file ops, and state via moto
+- Systemd-friendly exit codes + ready-to-customize unit file in `deploy/`
+- AWS credentials inline in `dave.yaml` — no `~/.aws/credentials` setup required
+- Test suite: **64 pytest tests** covering cost math, config loading, worker file ops, and full state via moto
 
-Things you might still want (open follow-ups):
-- A way to give Dave feedback when his PRs are bad (RLHF-lite — comment markers he reads on his next cycle)
-- Hot-reload of `dave.yaml` without restarting (currently you have to `systemctl restart dave`)
-- A web dashboard for `dave --status` (DDB → static HTML or a tiny FastAPI app)
-- More personality packs in `dave.example.yaml` so users can swap "doomer Linux greybeard" / "noir detective" / "1940s pulp narrator" out of the box
+Things still cooking (the next stretch):
+- **Iterative PR mode** — let Dave continue work across cycles on the same branch for issues too big for one Sonnet call (e.g. "migrate the test suite to pytest"). Currently one-shot only.
+- **Self-review pass** — have Haiku score Dave's diff before auto-merge, only merge if quality threshold met
+- **CI integration** — wait for the repo's CI checks to pass before auto-merging
+- **Hot-reload of `dave.yaml`** — pick up config changes without `systemctl restart dave`
+- **Personality packs** — ship a `personalities/` directory with `doomer-linux.yaml`, `noir-detective.yaml`, etc. for one-line persona swaps
+- **Issue feedback loop** — Dave reads comments on his own past PRs/issues and adjusts behavior on the next cycle (RLHF-lite)
+- **Web dashboard** — tiny FastAPI app reading from DDB so you don't need to ssh into the box for `--status`
 
 ---
+
+## Dave in the wild
+
+Once Dave is running on a server with `auto_merge: true` and `auto_propose: true`, here's what a typical sequence looks like in `journalctl -u dave`:
+
+```
+04:43:38  Started dave.service - Dave — autonomous coding loop.
+04:43:39  Persona active: Dave
+04:43:39  Dave online for JackFurton/CarlsGarage
+04:43:39  Model: claude-sonnet-4-6 | Budget: $5.0/day | Label: 'dave' | Poll: 60s
+04:43:39  Found 0 open issues with label 'dave'
+04:43:39  No pending tasks
+04:43:39  Queue idle for 0.0min, waiting for 10min before proposing
+04:43:39  Sleeping 60s...
+...
+04:53:42  Auto-proposing issue (idle 10min, 0/5 today)
+04:53:46  Proposed issue #9: Add a CONTRIBUTING.md with build and test instructions
+04:54:46  Found 1 open issues with label 'dave'
+04:54:46  Triaging 1 new issues
+04:54:48    triaged #9 → priority 3
+04:54:48  [worker-3a8e2b] Picking up #9: Add a CONTRIBUTING.md with build and test instructions
+04:54:50  [worker-3a8e2b] Cloning JackFurton/CarlsGarage...
+04:54:51  [worker-3a8e2b] Selecting relevant files...
+04:54:53  [worker-3a8e2b] Loaded 4 files into context
+04:54:53  [worker-3a8e2b] Calling claude-sonnet-4-6 to implement #9...
+04:55:18    created CONTRIBUTING.md
+04:55:22  [worker-3a8e2b] PR created: https://github.com/JackFurton/CarlsGarage/pull/10
+04:55:22  [worker-3a8e2b] Attempting auto-merge (squash)...
+04:55:24  [worker-3a8e2b] Auto-merged PR #10
+```
+
+Meanwhile in Slack, baremetal_bill is posting:
+
+```
+:hey-im-dave: Hey I'm Dave, welcome to my shop. Today we will be taking a look at https://github.com/JackFurton/CarlsGarage
+
+:dave-ponder: [JackFurton/CarlsGarage] Alright folks, I just took a look at issue #9 — looks like we're missing a CONTRIBUTING.md, which is kind of like having a workshop with no manual on the wall. I'm gonna roll up my sleeves and put one together so the next person who walks in knows where everything is.
+
+:dave-oven-mits: [JackFurton/CarlsGarage] Alright, so I dug into the repo and put together a fresh CONTRIBUTING.md that walks through the CMake build flow, the test runner, and how to add new logger destinations — kind of like writing up a wall chart for the workshop. Think of it as that laminated card you keep next to the lathe so you don't have to dig through the manual every time. Should make it a lot easier for anyone wanting to jump in and help out.
+https://github.com/JackFurton/CarlsGarage/pull/10
+
+:dave-chad: [JackFurton/CarlsGarage] Shipped #9!
+```
+
+That's the train. One issue every 2-3 minutes when Dave has work, polite 60-second polls when he doesn't, and a 10-minute idle timer before he proposes a new one. The whole thing fits inside the $5/day cap with room to spare.
 
 ## License
 
