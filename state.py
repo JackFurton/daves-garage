@@ -160,10 +160,11 @@ class HiveState:
         })
 
     def fail_task(self, issue_id: int, error: str):
+        # NOTE: 'error' is a reserved keyword in DynamoDB — must alias via ExpressionAttributeNames.
         self.table.update_item(
             Key={"PK": f"TASK#{issue_id}", "SK": "META"},
-            UpdateExpression="SET #s = :s, error = :e, failed_at = :t",
-            ExpressionAttributeNames={"#s": "status"},
+            UpdateExpression="SET #s = :s, #err = :e, failed_at = :t",
+            ExpressionAttributeNames={"#s": "status", "#err": "error"},
             ExpressionAttributeValues={
                 ":s": "failed",
                 ":e": error,

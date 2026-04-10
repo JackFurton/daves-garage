@@ -1,9 +1,60 @@
 """GitHub API client — issues, branches, PRs, clones."""
+import functools
 import os
 import subprocess
+import time
 from typing import Optional
 
 import requests
+
+from logger import get_logger
+
+log = get_logger("github")
+
+
+def _with_retry(max_attempts: int = 3, base_delay: float = 0.5):
+    """Retry GitHub API calls on connection errors and 5xx responses with exponential backoff.
+
+    Doesn't retry 4xx errors — those are usually a config / token / not-found issue and
+    retrying won't help. Connection errors and 5xx are transient and worth a retry.
+    """
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            last_exc: Optional[Exception] = None
+            for attempt in range(max_attempts):
+                try:
+                    return func(*args, **kwargs)
+                except requests.exceptions.ConnectionError as e:
+                    last_exc = e
+                    if attempt + 1 < max_attempts:
+                        delay = base_delay * (2 ** attempt)
+                        log.warning(f"GitHub connection error (attempt {attempt+1}/{max_attempts}), "
+                                    f"retrying in {delay:.1f}s: {e}")
+                        time.sleep(delay)
+                        continue
+                except requests.exceptions.Timeout as e:
+                    last_exc = e
+                    if attempt + 1 < max_attempts:
+                        delay = base_delay * (2 ** attempt)
+                        log.warning(f"GitHub timeout (attempt {attempt+1}/{max_attempts}), "
+                                    f"retrying in {delay:.1f}s")
+                        time.sleep(delay)
+                        continue
+                except requests.exceptions.HTTPError as e:
+                    status = getattr(e.response, "status_code", None)
+                    if status and 500 <= status < 600 and attempt + 1 < max_attempts:
+                        delay = base_delay * (2 ** attempt)
+                        log.warning(f"GitHub {status} (attempt {attempt+1}/{max_attempts}), "
+                                    f"retrying in {delay:.1f}s")
+                        time.sleep(delay)
+                        last_exc = e
+                        continue
+                    raise
+            if last_exc is not None:
+                raise last_exc
+        return wrapper
+    return decorator
 
 
 class GitHubClient:
@@ -24,20 +75,25 @@ class GitHubClient:
         if self._default_branch:
             return self._default_branch
         try:
-            resp = requests.get(
-                f"{self.api}/repos/{self.repo}",
-                headers=self.headers,
-                timeout=30,
-            )
-            resp.raise_for_status()
-            self._default_branch = resp.json().get("default_branch", "main")
+            self._default_branch = self._fetch_default_branch()
         except Exception as e:
-            print(f"[github] Could not fetch default branch, falling back to 'main': {e}")
+            log.warning(f"Could not fetch default branch, falling back to 'main': {e}")
             self._default_branch = "main"
         return self._default_branch
 
+    @_with_retry()
+    def _fetch_default_branch(self) -> str:
+        resp = requests.get(
+            f"{self.api}/repos/{self.repo}",
+            headers=self.headers,
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json().get("default_branch", "main")
+
     # ── Issues ──
 
+    @_with_retry()
     def get_issues(self, label: str) -> list:
         """Fetch open issues with a given label."""
         resp = requests.get(
@@ -50,6 +106,7 @@ class GitHubClient:
         # Filter out pull requests (GitHub API returns them as issues too)
         return [i for i in resp.json() if "pull_request" not in i]
 
+    @_with_retry()
     def get_issue(self, issue_id: int) -> dict:
         resp = requests.get(
             f"{self.api}/repos/{self.repo}/issues/{issue_id}",
@@ -59,13 +116,15 @@ class GitHubClient:
         resp.raise_for_status()
         return resp.json()
 
+    @_with_retry()
     def comment_on_issue(self, issue_id: int, body: str):
-        requests.post(
+        resp = requests.post(
             f"{self.api}/repos/{self.repo}/issues/{issue_id}/comments",
             headers=self.headers,
             json={"body": body},
             timeout=30,
         )
+        resp.raise_for_status()
 
     # ── Branches + PRs ──
 
@@ -111,6 +170,7 @@ class GitHubClient:
         )
         return True
 
+    @_with_retry()
     def create_pr(self, branch_name: str, title: str, body: str, base: Optional[str] = None) -> dict:
         if base is None:
             base = self.get_default_branch()

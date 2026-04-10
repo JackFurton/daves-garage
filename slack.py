@@ -45,7 +45,14 @@ class SlackNotifier:
             return choice
 
     def _generate(self, event: str, default: str, **vars) -> str:
-        """Pick a message: persona-generated > config-static > formatted default."""
+        """Pick a message: persona-generated > config-static > formatted default.
+
+        Auto-injects {repo_url} whenever {repo} is present, so any template or persona
+        prompt can reference the full GitHub URL of the target repo.
+        """
+        if "repo" in vars and "repo_url" not in vars:
+            vars["repo_url"] = f"https://github.com/{vars['repo']}"
+
         if self.persona is not None and self.persona.enabled:
             msg = self.persona.generate(event, vars, default)
             if msg:

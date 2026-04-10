@@ -1,0 +1,38 @@
+[Unit]
+Description=Dave — autonomous coding loop
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dave
+Group=dave
+WorkingDirectory=/opt/dave
+
+# Secrets and AWS credentials live here. Mode 0600. Loaded into Dave's environment.
+# At minimum: GITHUB_TOKEN, ANTHROPIC_API_KEY, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+EnvironmentFile=/etc/dave/dave.env
+
+ExecStart=/opt/dave/.venv/bin/python /opt/dave/dave.py --config /etc/dave/dave.yaml
+
+# Restart on crash, but NOT on budget-exhausted (exit code 2). The budget cap is the
+# point of the whole system — if we hit it, wait until tomorrow.
+Restart=on-failure
+RestartSec=30
+RestartPreventExitStatus=2
+
+# Send everything Dave logs to journalctl. You can also point logfile in dave.yaml at
+# /var/log/dave/dave.log if you want a separate file you can `tail -f`.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dave
+
+# Hardening — Dave only needs network and his own working dir.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/dave /var/log/dave
+
+[Install]
+WantedBy=multi-user.target

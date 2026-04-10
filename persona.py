@@ -52,11 +52,19 @@ class Persona:
     # ── Slack message generation ──
 
     def first_message(self, repo: str) -> str:
-        """Render the persona's first-startup message template."""
+        """Render the persona's first-startup message template.
+
+        Available template vars: {repo}, {repo_url}, {name}.
+        """
+        repo_url = f"https://github.com/{repo}"
         if not self.first_message_tpl:
-            return f"{self.name} is online for {repo}."
+            return f"{self.name} is online for {repo_url}."
         try:
-            return self.first_message_tpl.format(repo=repo, name=self.name)
+            return self.first_message_tpl.format(
+                repo=repo,
+                repo_url=repo_url,
+                name=self.name,
+            )
         except KeyError:
             return self.first_message_tpl
 

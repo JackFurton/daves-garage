@@ -71,7 +71,7 @@ persona:
     error:          ":dave-ponder:"
     shutdown:       ":hey-im-dave:"
     budget_warning: ":dave-ponder:"
-  first_message: "Hey I'm Dave, welcome to my shop. Today we will be taking a look at {repo}"
+  first_message: "Hey I'm Dave, welcome to my shop. Today we will be taking a look at {repo_url}"
 
 # ── Custom Slack messages (fallbacks if persona generation fails) ──
 # Only used if the persona is disabled OR if Haiku is unavailable.
