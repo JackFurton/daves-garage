@@ -221,8 +221,10 @@ class Controller:
             log.error(f"Failed to create proposed issue: {e}")
             return
 
-        log.info(f"Proposed issue #{issue['number']}: {title}")
-        self.state.record_proposed_issue(self.config.repo, issue["number"], full_title)
+        log.info(f"Proposed issue #{issue['number']} ({category}): {title}")
+        self.state.record_proposed_issue(
+            self.config.repo, issue["number"], full_title, category=category,
+        )
         # Clear the empty marker so the next cycle picks up the new issue without re-proposing
         self.state.clear_queue_empty_marker(self.config.repo)
 
@@ -246,6 +248,12 @@ class Controller:
         recent = self.state.get_recent_proposed_titles(self.config.repo, limit=10)
         recent_text = "\n".join(f"- {t}" for t in recent) if recent else "(none yet)"
 
+        recent_cats = self.state.get_recent_proposed_categories(self.config.repo, limit=5)
+        if recent_cats:
+            recent_categories_text = "Last 5 proposals (most recent first): " + ", ".join(recent_cats)
+        else:
+            recent_categories_text = "(none yet — pick whatever fits best)"
+
         prompt = prompts.render(
             "propose_issue",
             repo=self.config.repo,
@@ -253,6 +261,7 @@ class Controller:
             file_tree=file_tree[:2000],
             lessons=lessons_text,
             recent_proposals=recent_text,
+            recent_categories=recent_categories_text,
         )
 
         try:

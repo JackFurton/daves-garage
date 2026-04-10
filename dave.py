@@ -53,6 +53,8 @@ def main() -> int:
                         help="Run the loop but skip git push, PR creation, and DDB task writes")
     parser.add_argument("--doctor", action="store_true",
                         help="Validate every credential and connection, then exit (preflight check)")
+    parser.add_argument("--history", action="store_true",
+                        help="Show Dave's recently completed tasks with PR links and summaries")
     args = parser.parse_args()
 
     # Load config
@@ -117,6 +119,11 @@ def main() -> int:
     # Status mode
     if args.status:
         _print_status(state, budget, config)
+        return EXIT_OK
+
+    # History mode — show recently completed tasks with PR links
+    if args.history:
+        _print_history(state)
         return EXIT_OK
 
     # Graceful shutdown — handler only flips a flag, no I/O.
@@ -305,6 +312,31 @@ def _doctor(config, log) -> int:
     log.info("  2. python dave.py --once              # one real cycle")
     log.info("  3. python dave.py                     # full loop")
     return EXIT_OK
+
+
+def _print_history(state: HiveState, limit: int = 20) -> None:
+    """Print Dave's recently completed tasks. Used by --history."""
+    tasks = state.get_recent_completed_tasks(limit=limit)
+    if not tasks:
+        print("\nNo completed tasks yet. Dave hasn't shipped anything.")
+        print("Run 'python dave.py --once' or start the loop to get him going.\n")
+        return
+
+    print(f"\nDave's recent ships ({len(tasks)} most recent)\n")
+    for t in tasks:
+        completed = t["completed_at"][:19].replace("T", " ") if t.get("completed_at") else "?"
+        priority = f"P{t['priority']}" if t.get("priority") else "P?"
+        print(f"  #{t['issue_id']:>4}  [{priority}]  {completed} UTC")
+        print(f"        {t['title'][:80]}")
+        if t.get("pr_url"):
+            print(f"        {t['pr_url']}")
+        if t.get("summary"):
+            # Print first ~150 chars of the summary
+            summary = t["summary"].replace("\n", " ").strip()
+            if len(summary) > 150:
+                summary = summary[:147] + "..."
+            print(f"        \"{summary}\"")
+        print()
 
 
 def _print_status(state: HiveState, budget: BudgetTracker, config) -> None:

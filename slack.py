@@ -132,13 +132,30 @@ class SlackNotifier:
             )
         self._post(f"*[{repo}]* {text}\n{pr_url}", self._emoji("pr_created", "🔨"))
 
-    def pr_merged(self, issue_id: int, repo: str):
-        text = self._generate(
-            "pr_merged",
-            "Shipped #{issue_id}!",
-            issue_id=issue_id, repo=repo,
-        )
-        self._post(f"*[{repo}]* {text}", self._emoji("pr_merged", "✅"))
+    def pr_merged(self, issue_id: int, repo: str, pr_url: Optional[str] = None,
+                  pr_number: Optional[int] = None):
+        """Post about a merged PR.
+
+        Important: this event is about the PR, not the issue — the persona should
+        say "I just merged PR #N" not "I just merged #issue_id". To prevent the model
+        from confusing the two numbers, we only put `issue_id` in the context when
+        `pr_number` is missing (legacy fallback). When `pr_number` is present, the
+        persona only sees the PR number and will narrate accordingly.
+        """
+        if pr_number:
+            default = "Shipped PR #{pr_number}!"
+            vars = {"repo": repo, "pr_number": pr_number, "pr_url": pr_url or ""}
+        else:
+            default = "Shipped issue #{issue_id}!"
+            vars = {"repo": repo, "issue_id": issue_id, "pr_url": pr_url or ""}
+
+        text = self._generate("pr_merged", default, **vars)
+
+        # Append the PR link so the merge post is clickable in Slack
+        body = f"*[{repo}]* {text}"
+        if pr_url:
+            body = f"{body}\n{pr_url}"
+        self._post(body, self._emoji("pr_merged", "✅"))
 
     def error(self, issue_id: int, error: str, repo: str):
         text = self._generate(

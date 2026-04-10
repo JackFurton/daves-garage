@@ -287,22 +287,81 @@ class HiveState:
         resp = self.table.get_item(Key={"PK": "CONFIG", "SK": "SETTINGS"})
         return resp.get("Item", {})
 
+    def get_recent_completed_tasks(self, limit: int = 20) -> list:
+        """Return Dave's recently completed tasks (most recent first), each joined
+        with its RESULT row (PR url + summary). Used by --history."""
+        # Scan TASK#*#META rows where status=complete
+        resp = self.table.scan(
+            FilterExpression="#s = :s AND SK = :sk",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={":s": "complete", ":sk": "META"},
+        )
+        items = resp.get("Items", [])
+        # Sort by completed_at (descending)
+        items.sort(key=lambda x: x.get("completed_at", ""), reverse=True)
+        items = items[:limit]
+        # Join with RESULT rows
+        out = []
+        for task in items:
+            issue_id = task["PK"].split("#")[1]
+            result_resp = self.table.get_item(Key={"PK": task["PK"], "SK": "RESULT"})
+            result = result_resp.get("Item", {})
+            out.append({
+                "issue_id": int(issue_id),
+                "title": task.get("title", ""),
+                "priority": int(task.get("priority", 99)),
+                "repo": task.get("repo", ""),
+                "completed_at": task.get("completed_at", ""),
+                "pr_url": result.get("pr_url", ""),
+                "summary": result.get("summary", ""),
+            })
+        return out
+
     # ── Auto-propose tracking ──
 
-    def record_proposed_issue(self, repo: str, issue_id: int, title: str):
-        """Log that Dave proposed (filed) an issue today."""
+    def record_proposed_issue(self, repo: str, issue_id: int, title: str,
+                                category: str = "uncategorized"):
+        """Log that Dave proposed (filed) an issue today, including its category
+        so future proposals can vary the work type."""
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         self.table.update_item(
             Key={"PK": f"PROPOSED#{repo}#{today}", "SK": "META"},
-            UpdateExpression="ADD #c :one SET last_issue_id = :iid, last_title = :t, last_at = :now",
+            UpdateExpression=(
+                "ADD #c :one "
+                "SET last_issue_id = :iid, last_title = :t, last_at = :now, "
+                "    last_category = :cat"
+            ),
             ExpressionAttributeNames={"#c": "count"},
             ExpressionAttributeValues={
                 ":one": Decimal(1),
                 ":iid": issue_id,
                 ":t": title,
                 ":now": _utc_now_iso(),
+                ":cat": category,
             },
         )
+        # Also write a per-proposal row so we can scan recent categories
+        self.table.put_item(Item={
+            "PK": f"PROPOSAL#{repo}",
+            "SK": f"AT#{_utc_now_iso()}#{issue_id}",
+            "issue_id": issue_id,
+            "title": title,
+            "category": category,
+            "created_at": _utc_now_iso(),
+        })
+
+    def get_recent_proposed_categories(self, repo: str, limit: int = 5) -> list:
+        """Return the categories of the last N proposals for this repo, most-recent first."""
+        resp = self.table.query(
+            KeyConditionExpression="PK = :pk AND begins_with(SK, :sk)",
+            ExpressionAttributeValues={
+                ":pk": f"PROPOSAL#{repo}",
+                ":sk": "AT#",
+            },
+            ScanIndexForward=False,  # newest first
+            Limit=limit,
+        )
+        return [item.get("category", "uncategorized") for item in resp.get("Items", [])]
 
     def get_proposed_count_today(self, repo: str) -> int:
         """How many issues has Dave proposed for this repo today?"""

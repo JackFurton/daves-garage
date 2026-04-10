@@ -133,7 +133,10 @@ class Worker:
                     merge_result = self.github.merge_pr(pr_number, method=self.config.auto_merge_method)
                     if merge_result.get("merged"):
                         log.info(f"[{self.worker_id}] Auto-merged PR #{pr_number}")
-                        self.slack.pr_merged(issue_id, self.config.repo)
+                        self.slack.pr_merged(
+                            issue_id, self.config.repo,
+                            pr_url=pr_url, pr_number=pr_number,
+                        )
                     else:
                         log.warning(f"[{self.worker_id}] Auto-merge skipped: "
                                     f"{merge_result.get('reason', 'unknown')}")
