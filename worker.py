@@ -57,7 +57,7 @@ class Worker:
                 # 1. Clone and branch
                 log.info(f"[{self.worker_id}] Cloning {self.config.repo}...")
                 repo_dir = self.github.clone_repo(workdir)
-                branch = f"hive/{issue_id}-{self._slugify(title)}"
+                branch = f"dave/{issue_id}-{self._slugify(title)}"
                 self.github.create_branch(repo_dir, branch)
                 if not self.dry_run:
                     self.state.heartbeat_task(issue_id, self.worker_id)
@@ -108,14 +108,14 @@ class Worker:
                 # 7. Commit and push
                 committed = self.github.commit_and_push(
                     repo_dir, branch,
-                    f"hive: implement #{issue_id} — {title}",
+                    f"dave: implement #{issue_id} — {title}",
                 )
                 if not committed:
                     raise RuntimeError("Nothing to commit — patches may have all missed their search strings")
 
                 # 8. Create PR
                 pr_body = self._build_pr_body(issue_id, title, implementation)
-                pr = self.github.create_pr(branch, f"hive: {title}", pr_body)
+                pr = self.github.create_pr(branch, f"dave: {title}", pr_body)
                 pr_url = pr["html_url"]
                 pr_number = pr["number"]
 
