@@ -39,8 +39,8 @@ class BudgetTracker:
         daily = self.state.log_spend(cost, model, purpose)
 
         if daily >= self.max_daily_usd * 0.8 and not self._warned_80 and self.slack:
+            self._warned_80 = True  # Set BEFORE the slack call to prevent recursive re-entry
             self.slack.budget_warning(daily, self.max_daily_usd)
-            self._warned_80 = True
 
         if daily >= self.max_daily_usd:
             raise BudgetExceeded(f"Daily budget exceeded: ${daily:.2f} / ${self.max_daily_usd:.2f}")
